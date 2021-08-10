@@ -1,0 +1,109 @@
+package org.example
+
+import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+object Address extends App{
+  val spark = SparkSession
+    .builder()
+    .appName("Transactions").master("local[*]")
+    .getOrCreate()
+  import spark.implicits._
+
+  val path = getClass.getClassLoader.getResource("addresses.csv").getPath
+
+  val schemainfo = StructType(List(
+
+    StructField("Customer_ID",StringType,true),
+    StructField("Address_ID",StringType,true),
+    StructField("From_date",IntegerType,true),
+    StructField("To_date",IntegerType,true)
+  ))
+
+  case class Addresses(Customer_ID:String,Address_ID:String,From_date:Int,To_date:Int)
+
+  case class AddressGroupNumber(addressGroups:List[Long],numberOfGroups:Int)
+  case class AddressGroupedData(group:Long,addressId:String,customerIds:Seq[String],startDate:Int,endDate:Int)
+
+  case class Range(from:Int, to:Int) {
+    assert(from <= to)
+
+    /** Returns true if given Range is completely contained in this range */
+    def contains(rhs: Range) = from <= rhs.from && rhs.to <= to
+
+    /** Returns true if given value is contained in this range */
+    def contains(v: Int) = from <= v && v <= to
+  }
+
+  def merge(ranges:List[Range]) = ranges
+    .sortWith{(a, b) => a.from < b.from || (a.from == b.from && a.to < b.to)}
+    .foldLeft(List[Range]()){(buildList, range) => buildList match {
+      case Nil => List(range)
+      case head :: tail => if (head.to >= range.from) {
+        Range(head.from, head.to.max(range.to)) :: tail
+      } else {
+        range :: buildList
+      }
+    }}
+    .reverse
+
+
+  import org.apache.spark.sql.functions.udf
+  val mergeDates = udf { values: Seq[String] => {
+
+  val rangeList = values.map(rec => {
+      val split = rec.split(":")
+
+      Range(split(0).toInt,split(1).toInt)
+
+    }).toList
+
+    merge(rangeList).map(rec => s"${rec.from}:${rec.to}")
+  } }
+
+  val stringArrayToLong = udf { values: Seq[String] => {
+    values.map(_.replace(":","").toLong)
+  }}
+
+  val stringToLong = udf { values: String => {
+    values.replace(":","").toLong
+  }}
+
+  val data= spark.read.schema(schemainfo).option("header","true" ).csv(path).as[Addresses]
+
+  data.show(false)
+
+  val groupd = data.select(col("Address_ID"),
+    concat_ws(":",col("From_date"),col("To_date")).as("dates"))
+    .groupBy("Address_ID").agg(collect_list("dates").as("dates"))
+
+  val addressGrupedDF = groupd.withColumn("addressGroups",mergeDates(col("dates"))).withColumn("numberOfGroups",size(col("addressGroups")))
+
+
+
+  def outputFormat1()={
+
+    addressGrupedDF.select(stringArrayToLong(col("addressGroups")).as("addressGroups"),col("numberOfGroups")).as[AddressGroupNumber]
+  }
+
+  def outputFormat2()={
+
+   val mappedAddresses =  addressGrupedDF.drop("dates","numberOfGroups").withColumn("groupstr",explode(col("addressGroups")))
+      .withColumn("datesinfo",split(col("groupstr"),":"))
+      .withColumn("startDate",$"datesinfo".getItem(0))
+      .withColumn("endDate",$"datesinfo".getItem(1))
+      .withColumn("group",stringToLong(col("groupstr")))
+      .select($"group",$"Address_ID",$"startDate",$"endDate")
+
+    mappedAddresses.join(data,Seq("Address_ID")).filter($"From_date" <= $"startDate" and $"endDate" >= $"endDate")
+      .drop("From_date","To_date").groupBy($"group",$"Address_ID".as("addressId"),$"startDate",$"endDate")
+      .agg(collect_list($"Customer_ID").as("customerIds")).select($"group",$"addressId",$"customerIds",$"startDate".cast("int"),$"endDate".cast("int")).as[AddressGroupedData]
+
+
+  }
+
+  outputFormat1().show(false)
+
+  outputFormat2().show(false)
+}
