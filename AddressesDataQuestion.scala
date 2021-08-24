@@ -9,6 +9,7 @@ object AddressesDataQuestion extends App {
   case class AddressData(customerId: String, addressId: String, fromDate: Int, toDate: Int)
 
   case class OverlappingCustomersObject(addressId: String, fromDate: Int, toDate: Int, customerIds: Set[String])
+  val test_data = OverlappingCustomersObject("test_address_id", 2, 3, Set("test_customer_id1"))
 
   case class AddressGroupedData(group: Long, addressId: String, customerIds: Seq[String], startDate: Int, endDate: Int)
 
@@ -35,9 +36,10 @@ object AddressesDataQuestion extends App {
           end = row._2(i)._2
           // add the customer id of conflicting address
 
-          val existingGroup: Option[OverlappingCustomersObject] = hashMap.get(currentAddressId + "" + counter)
-          existingGroup.get.customerIds.add(row._2(i)._3)
-          hashMap.put(currentAddressId + "," + counter, existingGroup.get)
+          val existingGroup: OverlappingCustomersObject = if(hashMap.contains(currentAddressId + "" + counter)) {hashMap.get(currentAddressId + "" + counter).get } else test_data
+
+          existingGroup.customerIds.add(row._2(i)._3)
+          hashMap.put(currentAddressId + "," + counter, existingGroup)
         }
       } else {
         start = row._2(i)._1
@@ -53,7 +55,7 @@ object AddressesDataQuestion extends App {
     hashMap
   }
 
-  val addressLines = Source.fromFile("address_data.csv").getLines().drop(1)
+  val addressLines = Source.fromFile("/Users/harshamandadi/Documents/mystuff/Spark-Scala-Maven-Example/src/main/scala/net/martinprobson/spark/address_data.csv").getLines().drop(1)
   val occupancyData: List[AddressData] = addressLines.map { line =>
     val split = line.split(",")
     AddressData(split(0), split(1), split(2).toInt, split(3).toInt)
@@ -61,12 +63,14 @@ object AddressesDataQuestion extends App {
 
   val occupancyDataWithAddressGroupIds: Iterable[List[(String, OverlappingCustomersObject)]] = occupancyData
     .groupBy(row => row.addressId)
+    .view
     .mapValues(_.map(r => (r.fromDate, r.toDate, r.customerId))) // map lists of occupancy data
-    .mapValues(list => list.toSeq.sortBy(_._1): _*) // sort by from date ascending order
-    .toMap
+    .mapValues(list => list.toSeq.sortBy(_._1)) // sort by from date ascending order
+    //.toMap
     .map(r => overlappingIntervals(r).toList)
 
-  val occupancyDataWithAddressGroupIdsFlattened: List[AddressGroupedData] = occupancyDataWithAddressGroupIds.map { row =>
+  val occupancyDataWithAddressGroupIdsFlattened: List[AddressGroupedData] = occupancyDataWithAddressGroupIds/*.filter(row => row.filter(t => t._1 != None) == true)*/
+    .map { row =>
     row
       .map { t =>
         AddressGroupedData(t._1.split(",")(1).toLong,
@@ -82,4 +86,6 @@ object AddressesDataQuestion extends App {
 //    .toMap
 
   val finalData = FinalResult(occupancyDataWithAddressGroupIdsFlattened, occupancyDataWithAddressGroupIdsFlattened.size)
+  println(finalData.customerGroupedDataList)
+  println(finalData.count)
 }
