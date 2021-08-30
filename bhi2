@@ -1,0 +1,69 @@
+package demo
+
+import scala.collection.mutable
+import scala.io.Source
+
+object AddressAssignment extends App {
+
+  case class AddressData(
+                          customerId: String,
+                          addressId: String,
+                          fromDate: Int,
+                          toDate: Int
+                        )
+
+  val fileName = getClass.getResource("/address_data2.csv").getPath
+
+  val addressLines = Source.fromFile(fileName).getLines().drop(1)
+
+  val occupancyData: List[AddressData] = addressLines.map { line =>
+    val split = line.split(",")
+    AddressData(split(0), split(1), split(2).toInt, split(3).toInt)
+  }.toList
+
+  val sortedOccupancyData = occupancyData.sortBy(r => (r.addressId, r.customerId))
+
+  println(sortedOccupancyData.take(20))
+
+  case class AddressGroupedData(
+                                 group: Long,
+                                 addressId: String,
+                                 customerIds: Seq[String],
+                                 startDate: Int,
+                                 endDate: Int
+                               )
+
+  sortedOccupancyData.groupBy(r => r.addressId)
+    .mapValues(_.sortBy(addressData => (addressData.fromDate, addressData.toDate)))
+    .mapValues(addressList => findOverlap(addressList))
+    .flatMap(_._2)
+    .zipWithIndex
+    .map {
+      case ((addressId, customerIds, startDate, endDate), group) =>
+        AddressGroupedData(group, addressId, customerIds, startDate, endDate)
+    }
+    .foreach(println)
+
+  def findOverlap(addressList: List[AddressData]) = {
+    val iterator = addressList.iterator
+    val mergedData = mutable.Stack[(String, Seq[String], Int, Int)]() //(addressId, customerIds, startDate, endDate)
+    while (iterator.hasNext) {
+      val address = iterator.next()
+      if (mergedData.nonEmpty) {
+        val prevAddress = mergedData.pop()
+        //if address is in same range merge it to a single record
+        if (prevAddress._4 > address.fromDate && prevAddress._4 < address.toDate) {
+          mergedData.push((address.addressId, prevAddress._2 :+ address.customerId, prevAddress._3, address.toDate))
+        } else {
+          mergedData.push(prevAddress)
+          mergedData.push((address.addressId, Seq(address.customerId), address.fromDate, address.toDate))
+        }
+      } else {
+        mergedData.push((address.addressId, Seq(address.customerId), address.fromDate, address.toDate))
+      }
+      println("one sub group: " + mergedData)
+    }
+    mergedData.toList.reverse
+  }
+
+}
